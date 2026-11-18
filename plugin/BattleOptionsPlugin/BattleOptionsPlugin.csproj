@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <PrGame>ff6</PrGame>
+    <AssemblyName>BattleOptions.PR</AssemblyName>
+    <RootNamespace>BattleOptions</RootNamespace>
+  </PropertyGroup>
+  <!-- the kit: plugin/PrKit/*.cs, the game's BepInEx + interop references (pr/MODDING.md) -->
+  <Import Project="..\PrKit\PrKit.props" />
+</Project>
