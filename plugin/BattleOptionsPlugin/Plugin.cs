@@ -24,7 +24,7 @@ namespace BattleOptions
     public class Plugin : BasePlugin
     {
         public const string Guid = "prmod.battleoptions";
-        public const string Version = "0.2.0";
+        public const string Version = "0.2.1";
         internal static FeatureHost Features;
 
         public override void Load()

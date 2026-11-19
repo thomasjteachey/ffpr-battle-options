@@ -5,25 +5,30 @@ using Last.Battle;
 using Last.Management;
 using PrKit;
 using UnityEngine;
-using ActState = Last.Battle.BattleActExection.ActState;
 
 namespace BattleOptions
 {
-    // Battle Mode: Pause. The game's Wait stops all time in the battle's sub-menus (its ATB update,
-    // BattleProgressATBFF6.Update, returns while BattleUIManager.IsWaiting and SystemConfig's
-    // ATBBattleType is Wait) and while an action is staged (GetStatingAct / !IsStagingEnd). Pause is
-    // Wait, and time also stops (the user, 2026-11-18: "all bars should pause whenever an animation
-    // is occuring or i am choosing something"):
+    // Battle Mode: Pause. The game's Wait stops all time only in the battle's sub-menus (FF6's ATB
+    // update, BattleProgressATBFF6.Update, returns while BattleUIManager.IsWaiting and SystemConfig's
+    // ATBBattleType is Wait; tools/decomp/battle_options). Pause is Wait, and time also stops (the
+    // user, 2026-11-18: "all bars should pause whenever an animation is occuring or i am choosing
+    // something"):
     //  * while a character's turn is up: the game's queue of characters waiting for a command
     //    (BattleProgressATB.battleATBOrderUiStack: added when a gauge fills, PrePlayerOrder; left when
     //    a command is chosen, Remove; units that can't act dropped each frame) isn't empty;
-    //  * while an action plays out, its preparing and after phases included (BattleActExection's
-    //    nowState InPrepare, InAction, InAfterAction, CounterAct, CounterAI: Brave New World's nATB).
+    //  * while an action plays out, preparing to finishing (BattleActExection.GetStatingAct(): its
+    //    state machine isn't in None). The engine's shared ATB update (BattleProgressATB.Update, the
+    //    one FF6 overrides) stops for exactly this; tools/decomp/natb, tools/decomp/pause_anim.
+    //    Not BattleActExection.nowState: ChangeState moves the state machine and never writes that
+    //    field, so it stays None (0.1.3-0.2.0 read it and never held time for an action).
     // Then no ATB gauge fills, the party's or the enemies' (ATBCalc, which UpdateGaugeIncrease adds
     // each frame, answers 0; its hook runs last, after other mods' rates: Worlds Collide's SNES rates,
-    // Brave New World's formula), and no chosen action's wait counts down (UpdateChantTime, the Cast
-    // Bars' clock, skipped). Status timers go on. An action state that lasts over 20 s stops holding
-    // time (a state the game never left would otherwise stop the battle).
+    // Brave New World's formula), no chosen action's wait counts down (UpdateChantTime, the Cast
+    // Bars' clock, skipped) and no status timer runs (Conditions_Prefix). An action that lasts over
+    // 20 s stops holding time (a state the game never left would otherwise stop the battle).
+    // The engine's other check, !BattleUtility.IsStagingEnd() (a status effect's own animation still
+    // playing), isn't used: FF6 never relied on it, so one that never ends could stop a battle. Its
+    // time outside actions is logged per battle ([pause] status animations), to decide later.
     class PauseAtb : Feature
     {
         internal static int Frozen;      // enemy gauge updates held (test)
@@ -127,22 +132,59 @@ namespace BattleOptions
         // a character's turn is up (test, and the menu's help)
         internal static bool TurnUp() { Hold(); return up; }
 
+        internal static bool Acting;      // an action is playing (this frame; test)
+        internal static int ActionsHeld;  // actions time was held for (test)
+        static int heldLogged, stagingLogged;
+        static float stagingSince = -1f;
+
         static bool Animating()
         {
             var ex = BattlePlugManager.Instance()?.BattleActExection;
-            if (ex == null) return false;
-            var s = ex.nowState;
-            bool acting = s == ActState.InPrepare || s == ActState.InAction || s == ActState.InAfterAction ||
-                          s == ActState.CounterAct || s == ActState.CounterAI;
+            Acting = ex != null && ex.GetStatingAct();
             float now = Time.unscaledTime;
-            if (!acting) { animatingSince = -1f; gaveUp = false; return false; }
+            if (!Acting)
+            {
+                if (animatingSince >= 0f)
+                {
+                    ActionsHeld++;
+                    if (heldLogged < 3)
+                    {
+                        heldLogged++;
+                        Kit.Info($"[pause] time held {now - animatingSince:0.00} s for an action");
+                    }
+                }
+                animatingSince = -1f;
+                gaveUp = false;
+                WatchStaging(now);
+                return false;
+            }
+            stagingSince = -1f;
             if (animatingSince < 0f) animatingSince = now;
             if (!gaveUp && now - animatingSince > 20f)
             {
                 gaveUp = true;
-                Hooks.NoteOnce("pause-gave-up", () => $"[pause] action state {s} held time over 20 s: time runs on until it changes");
+                Hooks.NoteOnce("pause-gave-up", () => "[pause] an action held time over 20 s: time runs on until it ends");
             }
             return !gaveUp;
+        }
+
+        // A status effect's animation outside any action (the engine's !IsStagingEnd): not held, only
+        // timed, the first few logged.
+        static void WatchStaging(float now)
+        {
+            if (stagingLogged >= 5) return;
+            bool staging = !BattleUtility.IsStagingEnd();
+            if (staging)
+            {
+                if (stagingSince < 0f) stagingSince = now;
+                return;
+            }
+            if (stagingSince >= 0f && now - stagingSince > 0.05f)
+            {
+                stagingLogged++;
+                Kit.Info($"[pause] a status animation outside an action: {now - stagingSince:0.00} s (time not held)");
+            }
+            stagingSince = -1f;
         }
 
         // characters waiting for a command
