@@ -24,7 +24,7 @@ namespace BattleOptions
     public class Plugin : BasePlugin
     {
         public const string Guid = "prmod.battleoptions";
-        public const string Version = "0.1.4";
+        public const string Version = "0.2.0";
         internal static FeatureHost Features;
 
         public override void Load()
@@ -37,6 +37,11 @@ namespace BattleOptions
             void Lap(string name) { long now = clock.ElapsedMilliseconds; laps.Add($"{name} {now - lapAt}"); lapAt = now; }
 
             Kit.Init(Log, "Battle Options");
+            // A batch-mode launch is a developer/test run. Mute immediately, before the request
+            // file and feature host are processed, and keep it muted in the runner below. This
+            // also makes a malformed or wrong request file fail silently instead of playing the
+            // title music through a supposedly headless run.
+            if (TestRun.Headless) TestRun.Mute();
             if (!Game.Require(PrGame.FF4, PrGame.FF5, PrGame.FF6)) return;   // the ATB games
             Settings.Bind(Config);
             Features = new FeatureHost(Config, new Harmony(Guid));
@@ -73,7 +78,11 @@ namespace BattleOptions
     public class BattleOptionsRunner : MonoBehaviour
     {
         public BattleOptionsRunner(IntPtr ptr) : base(ptr) { }
-        void Update() => Plugin.Features?.Update();
+        void Update()
+        {
+            if (TestRun.Headless) TestRun.Mute();
+            Plugin.Features?.Update();
+        }
         void OnGUI() => Plugin.Features?.OnGUI();
     }
 }

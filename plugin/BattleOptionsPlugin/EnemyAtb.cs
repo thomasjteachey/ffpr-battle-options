@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using HarmonyLib;
 using Last.Battle;
 using Last.UI;
 using PrKit;
@@ -95,12 +97,38 @@ namespace BattleOptions
             try
             {
                 if (unit.IsRemove || BattleUtility.IsEscape(unit)) return true;
-                return conditions != null &&
-                       (conditions.IsCombatIneffectiveCondition(unit) || conditions.IsWithdrawalCondition(unit));
+                if (conditions == null) return false;
+                FindConditionChecks(conditions.GetType());
+                return CallCondition(ineffective, conditions, unit) || CallCondition(withdrawal, conditions, unit);
             }
             catch (Exception e)
             {
                 Hooks.WarnOnce("enemy gauge gone check", e);
+                return false;
+            }
+        }
+
+        // These helpers exist in current FF6 but not in the older FF4/FF5 builds. Resolve them at
+        // runtime so the shared checks above still work there without a MissingMethodException.
+        // HP, IsRemove, escape state and sprite visibility remain the fallback when neither exists.
+        static Type conditionType;
+        static MethodInfo ineffective, withdrawal;
+
+        static void FindConditionChecks(Type type)
+        {
+            if (conditionType == type) return;
+            conditionType = type;
+            ineffective = Patching.Find(type, "IsCombatIneffectiveCondition", 1);
+            withdrawal = Patching.Find(type, "IsWithdrawalCondition", 1);
+        }
+
+        static bool CallCondition(MethodInfo method, object target, BattleUnitData unit)
+        {
+            if (method == null) return false;
+            try { return method.Invoke(target, new object[] { unit }) is bool value && value; }
+            catch (Exception e)
+            {
+                Hooks.WarnOnce("enemy gauge " + method.Name, e);
                 return false;
             }
         }

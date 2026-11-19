@@ -102,7 +102,10 @@ namespace BattleOptions
         // The game's own class of a kind, by name (FF6: Serial.FF6...; FF4/FF5 theirs), else the shared base.
         internal static Type GameType(string format, Type fallback)
         {
-            var t = Hooks.TypeByName(string.Format(format, (int)Game.Current));   // not AccessTools': see Hooks.TypeByName
+            // FF4's older shared implementation is named Serial.FF0 rather than Serial.FF4.
+            // (Its battle progress uses the same FF0 suffix.)
+            int serial = Game.Current == PrGame.FF4 ? 0 : (int)Game.Current;
+            var t = Hooks.TypeByName(string.Format(format, serial));   // not AccessTools': see Hooks.TypeByName
             return t ?? fallback;
         }
     }
