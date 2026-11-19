@@ -74,10 +74,11 @@ namespace PrKit
 
         readonly List<Feature> features = new List<Feature>();
         readonly HashSet<Feature> checkedOnes = new HashSet<Feature>();
-        readonly Dictionary<Feature, long> cost = new Dictionary<Feature, long>();
+        // perf: ticks spent and the worst single call, per feature and pass ("EnemyAtb", "EnemyAtb gui")
+        readonly Dictionary<string, (long Total, long Worst)> cost = new Dictionary<string, (long, long)>();
         readonly bool perfLog;
         readonly Stopwatch clock = Stopwatch.StartNew();
-        long perfSince, frames;
+        long perfSince, frames, lastFrameAt, worstFrame;
         int frame;
 
         public FeatureHost(ConfigFile config, Harmony harmony)
@@ -104,14 +105,18 @@ namespace PrKit
             var on = new List<string>();
             var off = new List<string>();
             var failed = new List<string>();
+            var ms = new List<string>();
+            var watch = new Stopwatch();
             foreach (var f in features)
             {
                 if (!f.Enabled) { off.Add(f.Name); continue; }
                 try
                 {
+                    watch.Restart();
                     f.Bind();
                     f.Apply(Harmony);
                     on.Add(f.Name);
+                    ms.Add($"{f.Name} {watch.ElapsedMilliseconds}");
                 }
                 catch (Exception e)
                 {
@@ -121,7 +126,8 @@ namespace PrKit
                 }
             }
             Kit.Info($"[kit] features on: {List(on)}; off in the config: {List(off)}" +
-                     (failed.Count > 0 ? $"; failed: {List(failed)}" : ""));
+                     (failed.Count > 0 ? $"; failed: {List(failed)}" : "") +
+                     (ms.Count > 0 ? $" (ms: {string.Join(", ", ms)})" : ""));
             if (TestRuns)
             {
                 try { TestRun.StartIfRequested(Harmony); }
@@ -142,7 +148,7 @@ namespace PrKit
                 long t0 = perfLog ? clock.ElapsedTicks : 0;
                 try { f.Update(); }
                 catch (Exception e) { Hooks.WarnOnce(f.Name + " update", e); }
-                if (perfLog) cost[f] = (cost.TryGetValue(f, out var c) ? c : 0) + clock.ElapsedTicks - t0;
+                if (perfLog) Cost(f.Name, t0);
             }
             if (frame % 30 == 0 && checkedOnes.Count < features.Count) RunChecks();
             if (perfLog) Perf();
@@ -153,8 +159,10 @@ namespace PrKit
             foreach (var f in features)
             {
                 if (!f.Enabled) continue;
+                long t0 = perfLog ? clock.ElapsedTicks : 0;
                 try { f.OnGUI(); }
                 catch (Exception e) { Hooks.WarnOnce(f.Name + " gui", e); }
+                if (perfLog) Cost(f.Name + " gui", t0);
             }
         }
 
@@ -177,17 +185,29 @@ namespace PrKit
             }
         }
 
+        void Cost(string key, long t0)
+        {
+            long spent = clock.ElapsedTicks - t0;
+            var c = cost.TryGetValue(key, out var v) ? v : (0L, 0L);
+            cost[key] = (c.Item1 + spent, Math.Max(c.Item2, spent));
+        }
+
+        // a [perf] line every 2 minutes: fps, the longest frame, each feature's cost per second and its worst call
         void Perf()
         {
             frames++;
             long now = clock.ElapsedTicks;
+            if (lastFrameAt > 0) worstFrame = Math.Max(worstFrame, now - lastFrameAt);
+            lastFrameAt = now;
             double seconds = (now - perfSince) / (double)Stopwatch.Frequency;
             if (seconds < 120) return;
             double ms = 1000.0 / Stopwatch.Frequency;
-            var parts = cost.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key.Name} {kv.Value * ms / seconds:0.00} ms/s");
-            Kit.Info($"[perf] {seconds:0} s, {frames / seconds:0.0} fps; {string.Join(", ", parts)}");
+            var parts = cost.OrderByDescending(kv => kv.Value.Total)
+                .Select(kv => $"{kv.Key} {kv.Value.Total * ms / seconds:0.00} ms/s (worst {kv.Value.Worst * ms:0.0} ms)");
+            Kit.Info($"[perf] {seconds:0} s, {frames / seconds:0.0} fps, worst frame {worstFrame * ms:0} ms; {string.Join(", ", parts)}");
             cost.Clear();
             frames = 0;
+            worstFrame = 0;
             perfSince = now;
         }
 

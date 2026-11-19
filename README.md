@@ -6,9 +6,9 @@ Three battle settings in the game's own **Config** menu, for FINAL FANTASY VI Pi
 
 | Setting | Choices | What it does |
 |---|---|---|
-| **Battle Mode** | Wait / Active / **Pause** | Pause is Wait, and the enemies' ATB gauges also stop while one of your characters' turns is up (a command menu is waiting for you). Your other characters' gauges, actions already under way and status timers keep going. |
+| **Battle Mode** | Wait / Active / **Pause** | Pause is Wait, and all of the battle's time also stops while you choose a command and while an action plays out: every ATB gauge (your party's and the enemies'), every chosen action's cast time and every status timer (Regen, Poison, Stop, Doom...). |
 | **Cast Bars** | Off / On | While a character waits between a chosen command and its action (a spell's cast, an attack's wind-up, Jump's time in the air), their ATB gauge shows the wait left, draining. |
-| **Enemy ATB** | Off / On | Each enemy's ATB gauge is shown under it. |
+| **Enemy ATB** | Off / On | Each enemy's ATB gauge is shown under it (gone once the enemy is defeated or escapes). |
 
 The Cast Bars and Enemy ATB rows sit under the battle settings (after Battle Messages). The choices
 are kept in `BepInEx/config/prmod.battleoptions.cfg`; under Pause the game's own config keeps Wait,
@@ -29,9 +29,9 @@ Remove it by deleting `BepInEx/plugins/BattleOptions`.
 ## Compatibility
 
 - **FINAL FANTASY VI PR**: checked headless with Worlds Collide installed (the rows in the in-game
-  Config's battle page; Pause holding an enemy's gauge while turns are up; a Fight's wait drained on
+  Config's battle page; Pause holding gauges while turns are up; a Fight's wait drained on
   the cast bar; saves untouched). Pause and the cast bars apply after Worlds Collide's SNES ATB rates
-  and command waits. Built to sit beside Brave New World too (its own Wait Gauge: the Cast Bars
+  and command waits; Worlds Collide 0.6.4's status clock waits with Pause. Built to sit beside Brave New World too (its own Wait Gauge: the Cast Bars
   setting decides whether it shows), not yet run together.
 - **FINAL FANTASY IV and V PR**: the mod names only the engine code the Pixel Remasters share and
   finds each game's own Config and ATB classes by name, so it loads there, but it hasn't been tested
@@ -54,8 +54,13 @@ in (safe Harmony hooks, switchable features, headless test runs); `PrKit.props` 
   names their setting. Battle Mode gets a third choice; Cast Bars and Enemy ATB are copies of an
   On/Off row with setting types of their own, handled by hooks on the game's row set-up, Left/Right
   and help-line methods.
-- `PauseAtb.cs`: an enemy's gauge increase (`ATBCalc`) is zero while the game's queue of characters
-  waiting for a command (`BattleProgressATB.battleATBOrderUiStack`) isn't empty.
+- `PauseAtb.cs`: time is held while the game's queue of characters waiting for a command
+  (`BattleProgressATB.battleATBOrderUiStack`) isn't empty or an action is being prepared, played or
+  finished (`BattleActExection.nowState`): every gauge increase (`ATBCalc`) is zero, the cast
+  countdown (`UpdateChantTime`) and the status timers (`BattleConditionController.Update`, the part
+  of the ATB update the game's own Wait skips in its menus) are skipped. A mod with a battle clock
+  of its own can wait too: the held frame is in AppDomain data `pr.battle.timeHeldFrame` (Worlds
+  Collide's SNES status clock reads it).
 - `CastBars.cs`: the wait left on the character's chant (`BattleProgressATB.chantingInfo`) drawn on
   their ATB gauge (`BattlePlayerInfomationController.UpdateATB`).
 - `EnemyAtb.cs`: each enemy's gauge (`gaugeStatusDictionary`) drawn under its sprite, projected by

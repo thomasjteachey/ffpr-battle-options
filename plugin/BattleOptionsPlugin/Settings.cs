@@ -18,7 +18,7 @@ namespace BattleOptions
         {
             File = cfg;
             Pause = cfg.Bind("Settings", "PauseMode", false,
-                "Battle Mode: Pause. As Wait, and enemies' ATB gauges also stop while a character's turn is up. " +
+                "Battle Mode: Pause. As Wait, and every ATB gauge, cast time and status timer (Regen, Poison, Stop...) also stops while a command is being chosen or an action plays out. " +
                 "Chosen in the game's Config menu (Battle Mode: Wait / Active / Pause).");
             CastBars = cfg.Bind("Settings", "CastBars", true,
                 "A character's ATB gauge drains through the wait between a chosen command and its action. Config menu: Cast Bars.");
@@ -42,7 +42,7 @@ namespace BattleOptions
         internal const string PauseName = "Pause";
         internal const string CastBarsName = "Cast Bars";
         internal const string EnemyAtbName = "Enemy ATB";
-        internal const string PauseHelp = "Time stops when selecting items or magic spells, and enemies' ATB gauges also stop while a character's turn is up.";
+        internal const string PauseHelp = "Time stops while you choose a command and while actions play out: ATB gauges, cast times and status effects all wait.";
         internal const string CastBarsHelp = "Show the wait between a chosen command and its action on the character's ATB gauge.";
         internal const string EnemyAtbHelp = "Show each enemy's ATB gauge under it.";
 
@@ -102,7 +102,7 @@ namespace BattleOptions
         // The game's own class of a kind, by name (FF6: Serial.FF6...; FF4/FF5 theirs), else the shared base.
         internal static Type GameType(string format, Type fallback)
         {
-            var t = AccessTools.TypeByName(string.Format(format, (int)Game.Current));
+            var t = Hooks.TypeByName(string.Format(format, (int)Game.Current));   // not AccessTools': see Hooks.TypeByName
             return t ?? fallback;
         }
     }

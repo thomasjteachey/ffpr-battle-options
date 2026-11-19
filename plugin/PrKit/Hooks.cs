@@ -77,9 +77,21 @@ namespace PrKit
 
         // A game type by its full name ("Serial.FF5.Management.JobData"), null (logged once) if this
         // game has none: for code that should run in several PRs without referencing a type one lacks.
+        // Each loaded assembly is asked for the name (a table lookup). Not AccessTools.TypeByName: it
+        // tries only the caller's assembly by name and then loads every type of every assembly, the
+        // game's interop included (tens of thousands of types). That first scan took about 20 s of
+        // Battle Options' start on the Steam Deck (2026-11-18), 0.45 s on a desktop PC.
         public static Type TypeByName(string fullName)
         {
-            var t = AccessTools.TypeByName(fullName);
+            Type t = null;
+            try
+            {
+                t = typeof(MasterManager).Assembly.GetType(fullName, false);   // the game's own code (Assembly-CSharp)
+                if (t == null)
+                    foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+                        if ((t = a.GetType(fullName, false)) != null) break;
+            }
+            catch (Exception e) { Kit.Warn($"[kit] type {fullName}: {e.Message}"); }
             if (t == null) NoteOnce("type-" + fullName, () => $"[kit] {Game.Describe()} has no {fullName}");
             return t;
         }

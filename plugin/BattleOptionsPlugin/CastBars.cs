@@ -33,8 +33,8 @@ namespace BattleOptions
         public override void Apply(Harmony h)
         {
             int chants = 0;
-            foreach (var t in new[] { AccessTools.TypeByName("Last.Battle.BattleProgressATBFF6"),
-                                      AccessTools.TypeByName("Last.Battle.BattleProgressATBFF0"), typeof(BattleProgressATB) })
+            foreach (var t in new[] { Hooks.TypeByName("Last.Battle.BattleProgressATBFF6"),
+                                      Hooks.TypeByName("Last.Battle.BattleProgressATBFF0"), typeof(BattleProgressATB) })
             {
                 var m = t == null ? null : AccessTools.DeclaredMethod(t, "GetChantingTime");
                 if (m != null && Patching.Patch(h, m, typeof(CastBars), postfix: nameof(Chant_Postfix), priority: Priority.Last)) chants++;

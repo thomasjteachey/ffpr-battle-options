@@ -103,7 +103,7 @@ namespace PrKit
         {
             if (saveHooks >= 0) return saveHooks;
             int slotHooks = 0, n = 0;
-            var slots = AccessTools.TypeByName("Last.Management.SaveSlotManager");
+            var slots = Hooks.TypeByName("Last.Management.SaveSlotManager");
             if (slots != null)
                 foreach (var m in slots.GetMethods().Where(m => m.Name == "Save" && m.GetParameters().FirstOrDefault()?.ParameterType == typeof(int)))
                 {
@@ -111,12 +111,12 @@ namespace PrKit
                     if (TryPatch(h, m, withCallback ? nameof(NoSaveCallback) : nameof(NoSave))) slotHooks++;
                 }
             n = slotHooks;
-            var misc = AccessTools.TypeByName("Last.Interpreter.Instructions.External.Misc");
+            var misc = Hooks.TypeByName("Last.Interpreter.Instructions.External.Misc");
             var auto = misc == null ? null : AccessTools.Method(misc, "AutoSave");
             if (auto != null && TryPatch(h, auto, nameof(NoAutoSave))) n++;
             foreach (var name in new[] { "Last.Management.PictureBookSaveManager", "Last.Management.SystemConfigManager" })
             {
-                var t = AccessTools.TypeByName(name);
+                var t = Hooks.TypeByName(name);
                 if (t == null) continue;
                 foreach (var m in t.GetMethods().Where(m => m.Name == "Save"))
                     if (TryPatch(h, m, m.ReturnType == typeof(bool) ? nameof(NoDataSaveBool) : nameof(NoDataSave))) n++;

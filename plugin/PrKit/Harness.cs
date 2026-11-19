@@ -450,7 +450,7 @@ namespace PrKit
 
         static void HookMessages(Harmony h)
         {
-            var msg = AccessTools.TypeByName("Last.Interpreter.Instructions.Message");
+            var msg = Hooks.TypeByName("Last.Interpreter.Instructions.Message");
             var m = msg == null ? null : AccessTools.Method(msg, "Msg");
             if (m == null) { Kit.Info("[harness] no Message.Msg: skipmsg does nothing"); return; }
             try { h.Patch(m, prefix: new HarmonyMethod(typeof(Harness), nameof(Msg_Prefix))); }
@@ -471,11 +471,11 @@ namespace PrKit
 
         static void HookBattleLog(Harmony h)
         {
-            var provider = AccessTools.TypeByName($"Serial.FF{(int)Game.Current}.Calc.FunctionProvider");
+            var provider = Hooks.TypeByName($"Serial.FF{(int)Game.Current}.Calc.FunctionProvider");
             var act = provider == null ? null : AccessTools.Method(provider, "CreateActFunction");
             if (act != null) Hooks.Patch(h, act, typeof(Harness), prefix: nameof(Act_Prefix));
             else Kit.Info("[harness] no FunctionProvider.CreateActFunction in this game: no action log");
-            var atb = AccessTools.TypeByName("Last.Battle.BattleProgressATB");
+            var atb = Hooks.TypeByName("Last.Battle.BattleProgressATB");
             var end = atb == null ? null : AccessTools.Method(atb, "ActExectionEndDelegate");
             if (end != null) Hooks.Patch(h, end, typeof(Harness), postfix: nameof(ActEnd_Postfix));
         }

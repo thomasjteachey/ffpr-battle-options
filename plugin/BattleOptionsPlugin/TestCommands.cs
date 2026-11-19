@@ -67,9 +67,10 @@ namespace BattleOptions
             {
                 $"pause {Settings.Pause.Value} cast {Settings.CastBars.Value} enemy {Settings.EnemyAtb.Value}",
                 $"atb type {sys?.ATBBattleType} mode index {cfg?.BattleModeIndex}",
-                $"waiting {PauseAtb.Waiting()} turn up {PauseAtb.TurnUp()} frozen {PauseAtb.Frozen}",
+                $"waiting {PauseAtb.Waiting()} turn up {PauseAtb.TurnUp()} held {PauseAtb.Hold()} frozen {PauseAtb.Frozen} " +
+                $"casts held {PauseAtb.ChantsHeld} status held {PauseAtb.ConditionsHeld}",
                 $"cast drawn {CastBars.Drawn} full {CastBars.FullValue} gauge art {(CastBars.GaugeImage?.sprite != null ? CastBars.GaugeImage.sprite.name : "none")}",
-                $"enemy gauges shown {EnemyAtb.Shown}",
+                $"enemy gauges shown {EnemyAtb.Shown} fill {EnemyAtb.Art}",
             };
             var bm = BattlePlugManager.Instance();
             var progress = bm?.BattleProgress?.TryCast<BattleProgressATB>();
