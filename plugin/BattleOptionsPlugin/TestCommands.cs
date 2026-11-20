@@ -12,16 +12,29 @@ namespace BattleOptions
     //   bo menu                the Config menu's battle rows and ours, if it's open
     //   bo open                open the Config screen from the title (as its Config entry does)
     //   bo layout              where each enemy's gauge goes (a no-graphics run may never paint)
+    //   bo enemies             each enemy's HP, KO, animator state and gauge; where the gauges sit
+    //   bo auto                Active mode and the party on auto (a headless battle runs by itself)
     static class TestCommands
     {
         internal static void Register() =>
-            Harness.Register("bo", Run, "bo [set <pause|cast|enemy> <on|off> | menu | open | layout]: Battle Options' state");
+            Harness.Register("bo", Run, "bo [set <pause|cast|enemy> <on|off> | menu | open | layout | enemies | auto]: Battle Options' state");
 
         static string Run(string[] args)
         {
             try
             {
                 if (args.Length >= 1 && args[0] == "menu") return ConfigMenu.Describe();
+                if (args.Length >= 1 && args[0] == "enemies") return EnemyAtb.Describe();
+                if (args.Length >= 1 && args[0] == "auto")
+                {
+                    // Wait freezes a headless battle (command menus open with nobody to answer)
+                    var config = UserDataManager.Instance()?.Config;
+                    if (config != null) config.BattleModeIndex = 0;
+                    var ui = Last.UI.BattleUIManager.Instance;
+                    if (ui == null) return "no battle UI";
+                    ui.SetIsAuto(true);
+                    return "Active, auto on";
+                }
                 if (args.Length >= 1 && args[0] == "open")
                 {
                     var title = UnityEngine.Object.FindObjectOfType<Last.UI.KeyInput.TitleWindowController>();
@@ -71,7 +84,7 @@ namespace BattleOptions
                 $"actions held {PauseAtb.ActionsHeld} frozen {PauseAtb.Frozen} " +
                 $"casts held {PauseAtb.ChantsHeld} status held {PauseAtb.ConditionsHeld}",
                 $"cast drawn {CastBars.Drawn} full {CastBars.FullValue} gauge art {(CastBars.GaugeImage?.sprite != null ? CastBars.GaugeImage.sprite.name : "none")}",
-                $"enemy gauges shown {EnemyAtb.Shown} fill {EnemyAtb.Art}",
+                $"enemy gauges shown {EnemyAtb.Shown} fill {EnemyAtb.Art} in {EnemyAtb.Where}",
             };
             var bm = BattlePlugManager.Instance();
             var progress = bm?.BattleProgress?.TryCast<BattleProgressATB>();

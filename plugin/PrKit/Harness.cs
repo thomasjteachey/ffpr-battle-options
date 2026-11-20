@@ -242,12 +242,14 @@ namespace PrKit
             }, "skipmsg on|off: scripts' message boxes complete at once");
             Add("newgame", _ => NewGame(), "newgame: New Game on the title screen");
             Add("slots", _ => Slots(), "slots: the save slots (read only)");
-            Add("load", Load, "load [slot]: the latest save or a slot");
+            Add("load", Load, "load [slot] [goto]: the latest save or a slot (goto: the in-game load, FF6 always)");
             Add("warp", Warp, "warp <map> [point]: to a map's entrance, as ChangeMap does");
             Add("script", RunScript, "script <name>: an event script of the current map");
             Add("battle", Battle, "battle <party>: a real battle with any monster party, as EncountBoss");
             Add("encount", Encount, "encount <party>: a random-encounter style battle");
             Add("log", _ => TakeLog(), "log: battle actions since the last log");
+            Add("enemyhp", EnemyHp, "enemyhp <hp> [unique]: set the battle's enemies' HP (one by its unique id), so a real hit finishes them");
+            Add("shot", Shot, "shot <file.png> [width height]: the game's picture to a PNG (a run with graphics: probe_headless.ps1 -Graphics)");
             Add("quit", _ => { TestRun.Quit("harness: quit"); return "quitting"; }, "quit: end the run");
         }
 
@@ -284,7 +286,9 @@ namespace PrKit
             var slot = a.Length > 0 && int.TryParse(a[0], out var sid) ? mgr?.GetTargetSaveSlotData(sid) : mgr?.GetLatestSaveSlotData(false, false);
             if (slot == null) return "error: no such save";
             var tw = Object.FindObjectOfType<Last.UI.KeyInput.TitleWindowController>();
-            if (tw == null)
+            // FF6: the in-game load from the title too, as BNW's probe loads (its proven way): the title
+            // path below read the save and then stalled at the title (2026-11-20, a BNW save in a sandbox)
+            if (tw == null || Game.Current == PrGame.FF6 || (a.Length > 1 && a[1] == "goto"))
             {
                 mgr.GotoLoadSaveData(slot);   // on the field: the in-game load
                 return $"loading save {slot.Id} ({slot.TimeStamp}) on the field";
@@ -377,6 +381,104 @@ namespace PrKit
             if (Object.FindObjectOfType<FieldMap>()?.fieldController != null) return "field";
             if (Object.FindObjectOfType<Last.UI.KeyInput.TitleWindowController>() != null) return "title";
             return "other";
+        }
+
+        // --- shot: the game's picture, rendered off screen ---------------------------------------
+        // A run with a graphics device but no window (-batchmode without -nographics) draws nothing to a
+        // screen, so the picture is made here: every enabled camera in depth order into one texture,
+        // then the overlay canvases (UI not drawn by a camera) through a camera of our own, then a PNG.
+        // The user, 2026-11-20: "use the PC to take screenshots" (of BNW's dialogue; never the desktop).
+        static string Shot(string[] a)
+        {
+            if (a.Length < 1) return "error: shot <file.png> [width height]";
+            int w = a.Length >= 3 && int.TryParse(a[1], out var aw) ? aw : 1920;
+            int h = a.Length >= 3 && int.TryParse(a[2], out var ah) ? ah : 1080;
+            string path = a[0];
+            var rt = new RenderTexture(w, h, 24);
+            var restore = new List<(Canvas canvas, RenderMode mode, Camera cam)>();
+            GameObject temp = null;
+            try
+            {
+                var cams = new List<Camera>();
+                foreach (var c in Camera.allCameras) if (c != null && c.enabled) cams.Add(c);
+                cams.Sort((x, y) => x.depth.CompareTo(y.depth));
+                bool first = true;
+                foreach (var c in cams)
+                {
+                    if (c.targetTexture != null)
+                    {
+                        c.Render();   // an off-screen layer (the field's pixel buffer): drawn as the game draws it
+                        continue;
+                    }
+                    var old = c.targetTexture;
+                    var oldFlags = c.clearFlags;
+                    if (!first && c.clearFlags == CameraClearFlags.Skybox) c.clearFlags = CameraClearFlags.Depth;   // layers over the first
+                    c.targetTexture = rt;
+                    c.Render();
+                    c.targetTexture = old;
+                    c.clearFlags = oldFlags;
+                    first = false;
+                }
+                var overlays = new List<Canvas>();
+                foreach (var cv in Object.FindObjectsOfType<Canvas>())
+                    if (cv != null && cv.isRootCanvas && cv.enabled && cv.gameObject.activeInHierarchy && cv.renderMode == RenderMode.ScreenSpaceOverlay)
+                        overlays.Add(cv);
+                if (overlays.Count > 0)
+                {
+                    temp = new GameObject("prkit-shot-ui");
+                    var ui = temp.AddComponent<Camera>();
+                    ui.clearFlags = CameraClearFlags.Depth;
+                    ui.orthographic = true;
+                    ui.cullingMask = -1;
+                    ui.depth = 1000;
+                    overlays.Sort((x, y) => x.sortingOrder.CompareTo(y.sortingOrder));
+                    foreach (var cv in overlays)
+                    {
+                        restore.Add((cv, cv.renderMode, cv.worldCamera));
+                        cv.renderMode = RenderMode.ScreenSpaceCamera;
+                        cv.worldCamera = ui;
+                    }
+                    Canvas.ForceUpdateCanvases();
+                    ui.targetTexture = rt;
+                    ui.Render();
+                    ui.targetTexture = null;
+                }
+                var was = RenderTexture.active;
+                RenderTexture.active = rt;
+                var tex = new Texture2D(w, h, TextureFormat.RGB24, false);
+                tex.ReadPixels(new Rect(0, 0, w, h), 0, 0);
+                tex.Apply();
+                RenderTexture.active = was;
+                byte[] png = ImageConversion.EncodeToPNG(tex);
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".");
+                File.WriteAllBytes(path, png);
+                Object.Destroy(tex);
+                return $"shot {path}: {w}x{h}, {cams.Count} cameras, {overlays.Count} overlay canvases, {png.Length} bytes";
+            }
+            catch (Exception e) { return $"error: {e.GetType().Name}: {e.Message}"; }
+            finally
+            {
+                foreach (var (cv, mode, cam) in restore) { if (cv != null) { cv.renderMode = mode; cv.worldCamera = cam; } }
+                if (temp != null) Object.Destroy(temp);
+                rt.Release();
+                Object.Destroy(rt);
+            }
+        }
+
+        static string EnemyHp(string[] a)
+        {
+            if (!InBattle) return "error: not in battle";
+            if (a.Length < 1 || !int.TryParse(a[0], out int hp) || hp < 1) return "error: enemyhp <hp >= 1> [unique]";
+            int only = a.Length > 1 && int.TryParse(a[1], out int u) ? u : -1;
+            var done = new List<string>();
+            foreach (var e in BattlePlugManager.Instance().GetEnemyUnits() ?? new BattleEnemyData[0])
+            {
+                var p = e?.BattleUnitDataInfo?.Parameter;
+                if (p == null || p.CurrentHP <= 0 || (only >= 0 && e.UniqueId != only)) continue;
+                p.CurrentHP = Math.Min(hp, p.ConfirmedMaxHp());
+                done.Add($"{Who(e)} (unique {e.UniqueId}) {p.CurrentHP}");
+            }
+            return done.Count == 0 ? "no enemy changed" : "enemy HP: " + string.Join(", ", done);
         }
 
         static string State()

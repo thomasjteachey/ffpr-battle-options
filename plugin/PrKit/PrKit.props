@@ -38,6 +38,8 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="$(PrKitDir)*.cs" />
+    <!-- FF6-only parts (namespace PrKit.Ff6: the SNES monster AI interpreter) -->
+    <Compile Include="$(PrKitDir)Ff6\*.cs" Condition="'$(PrGame)' == 'ff6'" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="$(GameDir)\BepInEx\core\BepInEx.Core.dll" Private="false" />

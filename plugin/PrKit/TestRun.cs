@@ -121,6 +121,12 @@ namespace PrKit
                 foreach (var m in t.GetMethods().Where(m => m.Name == "Save"))
                     if (TryPatch(h, m, m.ReturnType == typeof(bool) ? nameof(NoDataSaveBool) : nameof(NoDataSave))) n++;
             }
+            // the bestiary's updates write it without its Save: a battle script's registration SysCall
+            // (図鑑登録) rewrote the PC's bestiary in a Worlds Collide test, 2026-11-12 (WcSeeds blocks them too)
+            var book = Hooks.TypeByName("Last.Management.PictureBookSaveManager");
+            if (book != null)
+                foreach (var m in book.GetMethods().Where(m => m.Name is "Registration" or "UpdateDefeatCount" or "AddTotalSubjugationCount" or "UpdateScenarioFlags"))
+                    if (TryPatch(h, m, m.ReturnType == typeof(bool) ? nameof(NoDataSaveBool) : nameof(NoDataSave))) n++;
             saveHooks = slotHooks == 0 ? 0 : n;
             Kit.Info($"[test] saves blocked for this run ({n} save methods hooked, {slotHooks} of them slot saves)");
             return saveHooks;
@@ -159,8 +165,8 @@ namespace PrKit
         public static bool NoDataSave(MethodBase __originalMethod)
         {
             lock (dataSaveNoted)
-                if (dataSaveNoted.Add(__originalMethod.DeclaringType?.Name))
-                    Kit.Info($"[test] {__originalMethod.DeclaringType?.Name}.Save skipped (test run)");
+                if (dataSaveNoted.Add($"{__originalMethod.DeclaringType?.Name}.{__originalMethod.Name}"))
+                    Kit.Info($"[test] {__originalMethod.DeclaringType?.Name}.{__originalMethod.Name} skipped (test run)");
             return false;
         }
 
