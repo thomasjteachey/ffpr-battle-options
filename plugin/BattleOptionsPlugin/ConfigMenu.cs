@@ -29,6 +29,8 @@ namespace BattleOptions
         internal const int CastBarsType = 7101, EnemyAtbType = 7102;   // ours: not one of the game's
         internal const int Wait = 0, Active = 1, Pause = 2;            // Battle Mode's choices
         internal static int RowsAdded, MenusSeen;
+        static bool BnwNatb => AppDomain.CurrentDomain.GetData("pr.bnw.natb") is bool on && on;
+        static int PauseChoice => BnwNatb ? Active : Pause;
 
         public override void Apply(Harmony h)
         {
@@ -150,6 +152,18 @@ namespace BattleOptions
         {
             var names = r.NameList;
             if (names == null) return;
+            if (BnwNatb)
+            {
+                // BNW has no Active mode. Its nATB always uses Wait underneath, while Battle
+                // Options offers the extra full Pause as the second visible choice.
+                while (names.Count > 2) names.RemoveAt(names.Count - 1);
+                if (names.Count < 2) return;
+                names[Active] = Words.PauseName;
+                r.targetIndex = Settings.Pause.Value ? Active : Wait;
+                r.SetArrowChangeText(names[r.targetIndex]);
+                if (Settings.Pause.Value) menu.SetDescriptionText((ConfigCommandType)BattleMode, Active);
+                return;
+            }
             if (names.Count == 2) names.Add(Words.PauseName);
             if (!Settings.Pause.Value) return;
             if (r.targetIndex == Wait)
@@ -169,8 +183,8 @@ namespace BattleOptions
                 int t = TypeOf(__0);
                 if (t == BattleMode)
                 {
-                    bool pause = __0.targetIndex == Pause;
-                    if (pause) KeepWait();
+                    bool pause = __0.targetIndex == PauseChoice;
+                    if (pause || BnwNatb) KeepWait();
                     Settings.Set(Settings.Pause, pause);
                 }
                 else if (t == CastBarsType) Settings.Set(Settings.CastBars, __0.targetIndex == 1);
@@ -196,7 +210,7 @@ namespace BattleOptions
         {
             try
             {
-                if ((int)__0 != BattleMode || __1 != Pause) return;
+                if ((int)__0 != BattleMode || __1 != PauseChoice) return;
                 __result = PauseText;
                 __instance.SetDescriptionText(__result);
             }
@@ -211,7 +225,7 @@ namespace BattleOptions
                 int t = (int)__0;
                 if (t == CastBarsType) __result = Words.CastBarsHelp;
                 else if (t == EnemyAtbType) __result = Words.EnemyAtbHelp;
-                else if (t == BattleMode && ModeRow(__instance)?.targetIndex == Pause) __result = PauseText;
+                else if (t == BattleMode && ModeRow(__instance)?.targetIndex == PauseChoice) __result = PauseText;
             }
             catch (Exception e) { Hooks.WarnOnce("config.describe", e); }
         }

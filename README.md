@@ -30,8 +30,8 @@ Remove it by deleting `BepInEx/plugins/BattleOptions`.
 - **FINAL FANTASY VI PR**: checked headless with Worlds Collide installed (the rows in the in-game
   Config's battle page; Pause holding gauges while turns are up; a Fight's wait drained on
   the cast bar; saves untouched). Pause and the cast bars apply after Worlds Collide's SNES ATB rates
-  and command waits; Worlds Collide 0.6.4's status clock waits with Pause. Built to sit beside Brave New World too (its own Wait Gauge: the Cast Bars
-  setting decides whether it shows), not yet run together.
+  and command waits; Worlds Collide 0.6.4's status clock waits with Pause. With Brave New World,
+  Battle Mode offers Wait/Pause (BNW has no Active mode), and its Wait Gauge follows the Cast Bars setting.
 - **FINAL FANTASY IV PR**: tested in the in-game Config and battle. Pause, Cast Bars and Enemy ATB
   load; enemy gauges track live ATB and disappear with the enemy. FF IV's cast bars measure the
   game's own countdown, since it has no separate wait-time table.

@@ -40,6 +40,13 @@
     <Compile Include="$(PrKitDir)*.cs" />
     <!-- FF6-only parts (namespace PrKit.Ff6: the SNES monster AI interpreter) -->
     <Compile Include="$(PrKitDir)Ff6\*.cs" Condition="'$(PrGame)' == 'ff6'" />
+    <!-- the seed system for randomizer mods (namespace PrKit.Seeds: flag model, options screen,
+         generator runner, seed library with live apply and save hooks), opt-in:
+         <PrKitSeeds>true</PrKitSeeds> (Worlds Collide, Beyond Chaos) -->
+    <Compile Include="$(PrKitDir)Seeds\*.cs" Condition="'$(PrKitSeeds)' == 'true'" />
+    <!-- the SNES music player (namespace PrKit.Snes: the S-DSP and FF6's sound driver re-implemented,
+         song packs, a waveOut stream), opt-in: <PrKitSnes>true</PrKitSnes> (Beyond Chaos) -->
+    <Compile Include="$(PrKitDir)Snes\*.cs" Condition="'$(PrKitSnes)' == 'true'" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="$(GameDir)\BepInEx\core\BepInEx.Core.dll" Private="false" />

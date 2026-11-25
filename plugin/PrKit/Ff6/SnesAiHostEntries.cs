@@ -23,8 +23,7 @@ namespace PrKit.Ff6
 
         static void LiftOut(EventCommand ec, BattleEnemyData unit)
         {
-            foreach (int c in OutConditions)
-                if (HasCondition(unit, c)) ec.RecoveryConditionEnemy(unit.UniqueId, c);
+            foreach (int c in OutConditions) Lift(ec, unit, c);   // by its condition id (they're types)
         }
         public static int Entries;             // for self-tests and the log
         public static string LastEntry = "";
@@ -194,9 +193,22 @@ namespace PrKit.Ff6
             f.Slot.Remove(cell);
             f.SnesId.Remove(cell);
             if (f.CellSlots != null && cell < f.CellSlots.Length) f.CellSlots[cell] = s;
-            f.Creating.Enqueue((id + 1, cell));
+            int prId = PrMonsterOf(id);
+            f.Creating.Enqueue((prId, cell));
             f.Hidden.Remove(s);
-            return $"{s}:in({id + 1}@{cell})";
+            return $"{s}:in({prId}@{cell})";
+        }
+
+        // the PR monster for an SNES monster brought in: e + 1, or for one past the SNES's 384 (a mod's grown table:
+        // T-Edition 1000 + e, EX 1512-1539) the PR row the data's copies {PR id: SNES id} name for it. Copies of a
+        // monster under 384 are the PR's own copies of a regular (the Coliseum's), so they never decide (ted-ex, 2026-11-20).
+        static int PrMonsterOf(int snes)
+        {
+            int best = 0;
+            if (snes >= 384 && D?.Copies != null)
+                foreach (var kv in D.Copies)
+                    if (kv.Value == snes && (best == 0 || kv.Key < best)) best = kv.Key;
+            return best > 0 ? best : snes + 1;
         }
 
         // the queued members, one at a time: the next once the last is on the field (or 3 s on)
@@ -226,6 +238,33 @@ namespace PrKit.Ff6
             f.InFlightSince = f.Clock;
         }
 
+        // the battle's opening, the other way round: a member the mod's formation shows from the start that the
+        // PR's battle script hides (sc_b_2009 puts NoSelect on Shiva, who comes in later in vanilla; BNW's
+        // Ifrit and Shiva fight together): lifted for the battle's first 4 seconds (the script's own
+        // BattleCondition may come a few frames in). The PR's NotTargeting stays (the mod's AI decides it: FB 06)
+        static readonly int[] HideConditions = { 416, 625, 673, 675 };
+
+        static void StartShows(Fight f)
+        {
+            var d = D;
+            if (d == null || d.StartShows.Count == 0 || f.Members == null || f.Clock > 4) return;
+            if (!d.StartShows.Contains(battleParty)) return;
+            var ec = BattlePlugManager.Instance()?.EventCommand;
+            for (int s = 0; s < f.Members.Length; s++)
+            {
+                var m = f.Members[s];
+                if (m == null || m[2] != 1) continue;
+                var unit = UnitAt(f, s);
+                if (unit == null || IsDead(f, unit)) continue;
+                foreach (int c in HideConditions)
+                    if (HasCondition(unit, c))
+                    {
+                        Lift(ec, unit, c);
+                        if (Verbose) Log($": slot {s} (monster {m[0]}) shown from the start: the PR's condition {c} lifted");
+                    }
+            }
+        }
+
         // the battle's opening: members the PR party lists but the SNES formation hides from the start
         // (Chadarnook's demon, one of Ifrit's Shivas, the three hidden Ultroses) leave at once
         static void StartHides()
@@ -235,7 +274,7 @@ namespace PrKit.Ff6
             if (bm == null || !bm.IsBattle() || bm.GetEnemyUnits().Length == 0) return;
             startHidesFor = battleSerial;
             var f = EnsureFight();
-            if (f.Members == null || bm.EventCommand == null) return;
+            if (f.Members == null || bm.EventCommand == null || f.PrEntrances) return;
             // only where the mod's scripts run the fight (a fight on the PR's own AI expects its members)
             var plugin = D?.Plugin;
             for (int s = 0; s < f.Members.Length; s++)

@@ -29,6 +29,23 @@ namespace PrKit.Ff6
         public Dictionary<int, int> Formations = new Dictionary<int, int>();    // PR party -> SNES formation
         // monsters HP loss never kills (the rules' BossDeathByScript: BNW's boss flag): their script does
         public HashSet<int> BossDeath = new HashSet<int>();
+        // SNES monster -> {its battle event (F7) -> the PR monster mode the plugin sets}: the PR's own battle
+        // script reads that mode (GetEnemyMode) and plays the scene (BNW's Vargas: event 07, Mash joins)
+        public Dictionary<int, Dictionary<int, int>> EventModes = new Dictionary<int, Dictionary<int, int>>();
+        // SNES monsters whose fight the PR's battle script ends (its scripted exit: the host leaves their
+        // "end the battle" / "everyone dies like a boss" to it), and bosses that wait at 0 HP for good (their
+        // script keeps fighting there: BNW's Vargas until Pummel), not the host's one-minute limit
+        public HashSet<int> PrEnds = new HashSet<int>(), ZeroWait = new HashSet<int>();
+        // parties whose PR battle script hides a member the mod's formation shows from the start (Shiva by
+        // NoSelect): the host lifts it in the battle's first seconds
+        public HashSet<int> StartShows = new HashSet<int>();
+        // SNES monsters in fights whose PR battle routine decides who is on screen (Chadarnook's switch, Air
+        // Force's bays, the Stooges...): their scripts run, their own bring-ins and hides are the routine's
+        public HashSet<int> PrEntrances = new HashSet<int>();
+        // SNES battle event bits a mod's scene reads after the fight, each on a PR flag: the battle var
+        // ($04-$17 hold $1DC9-$1DDC), its mask and the flag's DataStorage category / index (BNW's Dadaluma:
+        // fed Dried Meat, battle bit 4F, a Hell Claw after; tools/port_ai.py "event_bits")
+        public List<(int Var, int Mask, string Category, int Index)> EventBits = new List<(int, int, string, int)>();
 
         public static byte[] Hex(string h)
         {
@@ -81,6 +98,22 @@ namespace PrKit.Ff6
                 var t = ct.EnumerateArray().Select(x => x.GetInt32()).ToArray();
                 if (t.Length % 2 == 0 && t.Length > 0) d.Rules = d.Rules.WithCommandTable(t.Take(t.Length / 2).ToArray(), t.Skip(t.Length / 2).ToArray());
             }
+            if (sai.TryGetProperty("event_modes", out var em) && em.ValueKind == JsonValueKind.Object)
+                foreach (var p in em.EnumerateObject())
+                {
+                    var map = new Dictionary<int, int>();
+                    Ints(em, p.Name, map);
+                    d.EventModes[int.Parse(p.Name)] = map;
+                }
+            foreach (var (key, set) in new[] { ("pr_ends", d.PrEnds), ("zero_hp_wait", d.ZeroWait), ("start_shows", d.StartShows), ("pr_entrances", d.PrEntrances) })
+                if (sai.TryGetProperty(key, out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    foreach (var x in arr.EnumerateArray()) set.Add(x.GetInt32());
+            if (sai.TryGetProperty("event_bits", out var eb) && eb.ValueKind == JsonValueKind.Array)
+                foreach (var x in eb.EnumerateArray())
+                {
+                    var a = x.EnumerateArray().ToArray();
+                    if (a.Length == 4) d.EventBits.Add((a[0].GetInt32(), a[1].GetInt32(), a[2].GetString(), a[3].GetInt32()));
+                }
             if (sai.TryGetProperty("boss_death", out var bd))
                 foreach (var x in bd.EnumerateArray()) d.BossDeath.Add(x.GetInt32());
             return d;

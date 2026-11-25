@@ -85,12 +85,25 @@ namespace PrKit
             {
                 foreach (var file in Directory.GetFiles(text, "*_en.txt"))
                 {
+                    // story_cha_<lang>: each story line's name box (key -> the speaker's name, the game's own
+                    // format), set in the speaker table rather than as texts
+                    bool cha = Path.GetFileName(file).StartsWith("story_cha_", StringComparison.Ordinal);
+                    var speakers = cha ? MessageManager.Instance.speakerDictionary : null;
+                    if (cha && speakers == null) continue;
                     foreach (var line in File.ReadAllLines(file))
                     {
                         int tab = line.IndexOf('\t');
                         if (tab <= 0) continue;
                         var key = line.Substring(0, tab);
                         var value = Unescape(line.Substring(tab + 1));
+                        if (cha)
+                        {
+                            if (appliedText.TryGetValue("cha:" + key, out var w) && w == value) continue;
+                            if (!speakers.ContainsKey(key) || speakers[key] != value) speakers[key] = value;
+                            appliedText["cha:" + key] = value;
+                            r.Messages++;
+                            continue;
+                        }
                         if (appliedText.TryGetValue(key, out var was) && was == value) continue;
                         if (GameText.Get(key) != value) GameText.Set(key, value);
                         appliedText[key] = value;

@@ -24,7 +24,7 @@ namespace BattleOptions
     public class Plugin : BasePlugin
     {
         public const string Guid = "prmod.battleoptions";
-        public const string Version = "0.2.2";
+        public const string Version = "0.2.3";
         internal static FeatureHost Features;
 
         public override void Load()
@@ -43,6 +43,7 @@ namespace BattleOptions
             // title music through a supposedly headless run.
             if (TestRun.Headless) TestRun.Mute();
             if (!Game.Require(PrGame.FF4, PrGame.FF5, PrGame.FF6)) return;   // the ATB games
+            AppDomain.CurrentDomain.SetData("pr.battleoptions.present", true);
             Settings.Bind(Config);
             Features = new FeatureHost(Config, new Harmony(Guid));
             Lap("config");

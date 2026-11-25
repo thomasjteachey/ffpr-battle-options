@@ -27,8 +27,27 @@ namespace PrKit
         public static Func<bool> IsTestRun = () => TestRun.Running;
         // tests: the game's save folder is this one instead (a copy of the player's), so a test run can do a
         // mod's first start for real (the copy, then loading through the mod's names) without touching
-        // the player's folder or Steam Cloud; set before the game first looks for a save
+        // the player's folder or Steam Cloud; set before the game first looks for a save: by a mod's own
+        // request (BNW's probe: savesandbox=<dir>) or the kit's (prkit_test.request savesandbox=<dir>, read
+        // here). The test runner's sandbox: pr/build/save_sandbox/<name> (copies of the Deck's saves, 2026-11-20)
         public static string Sandbox;
+        static bool sandboxAsked;
+        static string SandboxDir
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(Sandbox) && !sandboxAsked && TestRun.Running)
+                {
+                    sandboxAsked = true;
+                    if (TestRun.Settings.TryGetValue("savesandbox", out var d) && !string.IsNullOrEmpty(d))
+                    {
+                        if (Directory.Exists(d)) Sandbox = d;
+                        else Kit.Warn($"[saves] savesandbox {d}: no such folder; the game's own saves (read only)");
+                    }
+                }
+                return Sandbox;
+            }
+        }
         static bool migrated;
         static readonly HashSet<string> Names = new HashSet<string> { "system_slot.sav", "PictureBook.sav" };
 
@@ -65,13 +84,143 @@ namespace PrKit
 
         public static void GetSavePath_Postfix(ref string __result)
         {
-            if (string.IsNullOrEmpty(Sandbox)) return;
+            var sandbox = SandboxDir;
+            if (string.IsNullOrEmpty(sandbox)) return;
             var real = __result;
-            Hooks.NoteOnce("saves-sandbox", () => $"[saves] test sandbox: {Sandbox} instead of {real}");
-            __result = Sandbox.TrimEnd('/', '\\') + "/";
+            if (SamePath(sandbox, real))
+            {
+                // never the player's own folder: a sandboxed run copies files into it (a mod's first start)
+                Kit.Warn($"[saves] the sandbox {sandbox} is the game's own save folder: ignored (the run reads the shared saves)");
+                Sandbox = null;
+                return;
+            }
+            Hooks.NoteOnce("saves-sandbox", () => $"[saves] test sandbox: {sandbox} instead of {real}");
+            __result = sandbox.TrimEnd('/', '\\') + "/";
         }
 
-        static bool Testing => string.IsNullOrEmpty(Sandbox) && IsTestRun();
+        static bool SamePath(string a, string b)
+        {
+            try
+            {
+                return string.Equals(Path.GetFullPath(a).TrimEnd('/', '\\'), Path.GetFullPath(b).TrimEnd('/', '\\'), StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception) { return false; }
+        }
+
+        static bool Testing => string.IsNullOrEmpty(SandboxDir) && IsTestRun();
+
+        // A save's time: its TimeStamp is text in the format of the machine that wrote it ("03/15/2022 21:39:57",
+        // "6/11/2022 11:07:07 AM"), so compared as text a 2022 save can pass for newer than a 2026 one
+        public static DateTime When(Last.Management.SaveSlotData sd)
+        {
+            var s = sd?.TimeStamp;
+            if (string.IsNullOrEmpty(s)) return DateTime.MinValue;
+            foreach (var c in new[] { System.Globalization.CultureInfo.InvariantCulture, System.Globalization.CultureInfo.CurrentCulture })
+                if (DateTime.TryParse(s, c, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out var t)) return t;
+            return DateTime.MinValue;
+        }
+
+        // the newest save with at least `members` in its party (test runs: a real party, not the opening's), not
+        // on a world map when another will do: a BNW probe battle started on the world map right after loading
+        // (the PC's slot 11, map 1) ended with a second game process, twice on 2026-11-20 (cause still open)
+        public static Last.Management.SaveSlotData NewestWithParty(int members = 3)
+        {
+            Last.Management.SaveSlotData best = null, bestWorld = null;
+            var all = Last.Management.SaveSlotManager.Instance()?.SaveSlotDataList;
+            if (all == null) return null;
+            foreach (var sd in all)
+            {
+                if (sd == null || string.IsNullOrEmpty(sd.TimeStamp)) continue;
+                int n = 0;
+                if (sd.PartyList != null) foreach (var pc in sd.PartyList) if (pc != null) n++;
+                if (n < members) continue;
+                if (IsWorldMap(MapId(sd))) { if (bestWorld == null || When(sd) > When(bestWorld)) bestWorld = sd; }
+                else if (best == null || When(sd) > When(best)) best = sd;
+            }
+            return best ?? bestWorld;
+        }
+
+        // the map a save stands on (its mapData's "mapId"), -1 when unknown
+        public static int MapId(Last.Management.SaveSlotData sd)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(sd?.mapData ?? "", @"""mapId""\s*:\s*(\d+)");
+            return m.Success ? int.Parse(m.Groups[1].Value) : -1;
+        }
+
+        // FF6's world maps (map.csv: Map_10010 the World of Balance, Map_10020 the World of Ruin, Map_10010_1)
+        public static bool IsWorldMap(int mapId) => Game.Current == PrGame.FF6 && (mapId == 1 || mapId == 2 || mapId == 575);
+
+        // --- loading a save at the title (headless test runs: the kit harness's "load", BNW's probe) ----------
+        // As the title's Load window does it (LoadGameWindowController's confirm, decompiled in tools/decomp/load
+        // and tools/decomp/titleload): a fade-out, the slot read (SaveSlotManager.LoadAsync), LoadData
+        // .RestoreSaveData, MapLoadProcessor.Start, then the title's SubSceneLoadingWait(false), which loads the
+        // field's scene and switches to it only once the screen has faded out (FadeManager.IsStateFadeOut: with
+        // useFade false the caller fades). The harness and WcTest left the fade out, so the switch never came:
+        // "the title's load reads the save and stalls" (2026-11-07..20), and the title's idle demo (map 609) later
+        // passed for a loaded field. The in-game load (GotoLoadSaveData) does nothing at the title.
+        // The rest of the Load window's part, also missing until then: its slot read (SaveListController
+        // .LoadSlotAsync) runs UserDataManager.Initialize first and OwnedCharacterClient.UpdateChracterName after,
+        // and while it waits for the switch its UpdateWait runs MapLoadProcessor.Update every frame (the map's
+        // load tasks; tools/ghidra/callers.py: only the Load/New Game windows and the field's own LoadMap do).
+        // With the fade alone the switch came in ~1 s headless, then the field never got ready (scene other, map 0).
+        // Returns null once the load has started, else why it can't.
+        public static string LoadAtTitle(Last.Management.SaveSlotData slot)
+        {
+            var mgr = Last.Management.SaveSlotManager.Instance();
+            var tw = UnityEngine.Object.FindObjectOfType<Last.UI.KeyInput.TitleWindowController>();
+            if (slot == null || mgr == null) return "no such save";
+            if (tw == null) return "not at the title";
+            var fade = Il2CppSystem.Fade.FadeManager.Instance;
+            if (fade == null) return "no fade manager";
+            if (titleHooks == null)
+            {
+                var upd = AccessTools.Method(typeof(Last.UI.KeyInput.TitleWindowController), "Update");
+                if (upd == null) return "no TitleWindowController.Update to run the map load from";
+                titleHooks = new Harmony("prkit.modsaves.titleload");
+                titleHooks.Patch(upd, postfix: new HarmonyMethod(typeof(ModSaves), nameof(TitleUpdate_Postfix)));
+            }
+            pumpTitle = IntPtr.Zero;
+            int id = slot.Id;
+            var black = new UnityEngine.Color(0, 0, 0, 1);
+            fade.FadeOut(0.5f, black);   // the Load window's own fade (0.5 s)
+            Last.Management.UserDataManager.Instance()?.Initialize();
+            Action<bool> loaded = ok =>
+            {
+                try
+                {
+                    if (!ok)
+                    {
+                        fade.FadeIn(0.5f, black);
+                        Kit.Warn($"[saves] save {id} didn't load");
+                        return;
+                    }
+                    var ld = new Last.Map.LoadData();
+                    ld.RestoreSaveData();
+                    Last.Map.MapLoadProcessor.Instance.Start(ld, true, false);
+                    pumpTitle = tw.Pointer;   // from now on the title's Update runs the map load, until the switch
+                    tw.StartCoroutine(tw.SubSceneLoadingWait(false));
+                    new Last.Management.OwnedCharacterClient().UpdateChracterName();
+                    Kit.Info($"[saves] save {id} read; loading its map {ld.MapId}");
+                }
+                catch (Exception e) { Kit.Warn($"[saves] save {id}: {e.Message}"); }
+            };
+            tw.StartCoroutine(mgr.LoadAsync(id, loaded, false));
+            return null;
+        }
+
+        static Harmony titleHooks;
+        static IntPtr pumpTitle = IntPtr.Zero;   // the title whose Update runs the map load (its Load window's UpdateWait)
+
+        public static void TitleUpdate_Postfix(Last.UI.KeyInput.TitleWindowController __instance)
+        {
+            if (pumpTitle == IntPtr.Zero || __instance == null || __instance.Pointer != pumpTitle) return;
+            try { Last.Map.MapLoadProcessor.Instance?.Update(); }
+            catch (Exception e)
+            {
+                pumpTitle = IntPtr.Zero;
+                Kit.Warn($"[saves] the title's map load: {e.Message}");
+            }
+        }
 
         public static void ConvertSha256_Prefix(ref string targetName)
         {

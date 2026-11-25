@@ -22,6 +22,10 @@ namespace PrKit.Ff6
         // FB 0B / 0C (set / clear a status on itself; 0B 07 = it dies) and FB 02 (the battle ends): BNW's
         // boss deaths use them (Worlds Collide leaves them off until its fights are tested with them)
         public virtual bool ScriptStatusEffects => true;
+        // seconds of battle time this frame for the scripts' timers (battle timer, monster timers): the frame's time;
+        // a mod whose battle clock stops and speeds up as the SNES's did answers SnesBattleClock.Dt() (Brave New
+        // World: nATB, Quickfill). The host's own waits (holds, deferred entries) stay on the frame's time.
+        public virtual float BattleClockDt() => Time.deltaTime;
     }
 
     // Every monster runs its mod's SNES AI script the way the SNES runs it: the mod's data carries each
@@ -63,6 +67,7 @@ namespace PrKit.Ff6
             // FB 04 reset, attack: ~110 of BNW's scripts, vanilla's pattern too) pushed them back each time
             public double Clock;
             public int Formation = -1;
+            public bool PrEntrances;   // its PR battle routine decides who is on screen (SnesAiData.PrEntrances)
             public int[] CellSlots;   // the data's SNES slot of each party cell (null: by cell order)
             public int[][] Members;   // the data's member of each SNES slot: {SNES id, cell, shown at start, listed} (null: unknown)
             public readonly HashSet<int> Hidden = new HashSet<int>();   // SNES slots hidden (F5 hide/kill, or hidden from the start)
@@ -96,6 +101,9 @@ namespace PrKit.Ff6
             public double EraseAllAt;
             public readonly HashSet<int> Erased = new HashSet<int>();   // killed by that: no death script of their own
             public readonly HashSet<int> ZeroCountered = new HashSet<int>(), ZeroForced = new HashSet<int>();   // at 0 HP: its death script ran / its counter pass was asked for
+            // FB 01 (invincible: the SNES's $3A3C zeroes the damage it takes) by unit pointer, with the HP to
+            // keep; FB 05 lifts it
+            public readonly Dictionary<IntPtr, int> Invincible = new Dictionary<IntPtr, int>();
             public System.Random Rng = new System.Random();
         }
 
@@ -164,7 +172,10 @@ namespace PrKit.Ff6
                 return id >= 1 && id <= 14 ? id - 1 : (id > 0 ? id : -1);   // PR character 1-14 = SNES actor 0-13
             }
 
-            bool Out(int unit) => unit >= 4 && f.Hidden.Contains(unit - 4);
+            // out of the battle: hidden by a script (F5), or by the PR's own ways of keeping a monster off the
+            // field (Escape = the host's Gone, Chadarnook's NoSelectChad, a battle event's fade-out)
+            bool Out(int unit) => unit >= 4 && (f.Hidden.Contains(unit - 4) ||
+                (u[unit] != null && (HasCondition(u[unit], GoneCondition) || HasCondition(u[unit], 673) || HasCondition(u[unit], 675))));
 
             public bool MonsterPresent(int slot) => u[4 + slot] != null && !IsDead(f, u[4 + slot]) && !HasCondition(u[4 + slot], 416) && !Out(4 + slot);
 
@@ -172,7 +183,8 @@ namespace PrKit.Ff6
             {
                 int m = 0;
                 for (int i = 0; i < 10; i++)
-                    if (u[i] != null && !IsDead(f, u[i]) && !HasCondition(u[i], 416) && !HasCondition(u[i], 420) && !Out(i)) m |= SnesAi.MaskOf(i);
+                    if (u[i] != null && !IsDead(f, u[i]) && !HasCondition(u[i], 416) && !HasCondition(u[i], 420) && !Out(i)
+                        && !HasCondition(u[i], NotTargeting) && !HasCondition(u[i], 625)) m |= SnesAi.MaskOf(i);   // FB 07 / the PR's NoSelect
                 return m;
             }
 
@@ -262,8 +274,8 @@ namespace PrKit.Ff6
             public void ClearTargettingTarget(int unit) { }
         }
 
-        // FF6's timers run on battle time (the PR stops time while an action plays; the SNES doesn't: close
-        // enough for the scripts' "after N seconds" checks)
+        // FF6's timers run on battle time: the frame's time by default (vanilla's clock runs through actions, as the
+        // PR's does), the mod's battle clock where it has one (SnesAiMod.BattleClockDt)
         public static void Update()
         {
             if (Mod == null || !Mod.Active) return;
@@ -271,22 +283,28 @@ namespace PrKit.Ff6
             if (bm == null || !bm.IsBattle()) return;
             StartHides();
             if (Current == null || fightSerial != battleSerial) return;   // the last battle's fight: nothing of it carries over
-            Tick(Time.deltaTime);
+            Tick(Time.deltaTime, Mod.BattleClockDt());
+            KeepInvincible(Current);
+            StartShows(Current);
             RunDeferred(Current);
             PumpCreations(Current);
             ZeroHpChecks(Current);
         }
 
-        internal static void Tick(float dt)
+        // dt: the frame's time (the host's own clock); battleDt: the battle clock's (the scripts' timers)
+        internal static void Tick(float dt, float battleDt)
         {
             var f = Current;
             if (f == null) return;
-            f.BattleTime += dt;
+            f.BattleTime += battleDt;
             f.Clock += dt;
             var u = Units();
             for (int s = 0; s < 6; s++)
-                if (u[4 + s] != null && !IsDead(u[4 + s]) && !f.Hidden.Contains(s)) f.MonsterTime[s] += dt;
+                if (u[4 + s] != null && !IsDead(u[4 + s]) && !f.Hidden.Contains(s)) f.MonsterTime[s] += battleDt;
         }
+
+        // the scripts' battle timer this fight (seconds of battle time; -1: no fight on the host), for tests
+        public static double BattleTimerSeconds => Current?.BattleTime ?? -1;
 
         // ---- what the interpreter's actions become in the PR --------------------------------------------
         const int Nothing = 696;   // the PR AIs' idle ability
@@ -326,33 +344,170 @@ namespace PrKit.Ff6
                 if (SnesAi.IsBattleVar(a.B2)) f.Vars[a.B2] = SnesAi.ChangeSwitch(f.Vars[a.B2], a.B1, a.B3);
                 else m.Var = SnesAi.ChangeSwitch(m.Var, a.B1, a.B3);
             }
+            SaveEventBits(f, a.Op == SnesAiOp.ChangeVar ? a.B1 : a.B2);
         }
 
-        // FB misc effects the battle can do here (C2/1E5E MiscAIEffectTbl): timers; with the mod's
-        // ScriptStatusEffects a status set/cleared on itself (0B/0C: status index 0-31, 0B 07 = Wound: it
-        // dies) and the battle's end (02: as "everyone dies like a boss"); the rest is logged
-        static void ApplyMisc(Fight f, int slot, SnesAiAction a, BattleUnitData me, List<SnesAiAction> entries)
+        // the SNES's battle event bits on their PR flags (SnesAiData.EventBits): read into the battle's vars
+        // when the fight starts (C2/2437), written back as a script changes them (the SNES at the battle's
+        // end, C2/49D7: the scene after the fight reads them either way)
+        static void LoadEventBits(Fight f)
+        {
+            var bits = D?.EventBits;
+            if (bits == null || bits.Count == 0) return;
+            try
+            {
+                var ds = Last.Interpreter.DataStorage.Instance;
+                if (ds == null) return;
+                foreach (var (v, mask, cat, index) in bits)
+                    f.Vars[v] = (byte)(ds.Get(cat, index) != 0 ? f.Vars[v] | mask : f.Vars[v] & ~mask);
+            }
+            catch (Exception e) { Hooks.WarnOnce("enemy-ai-event-bits", e); }
+        }
+
+        static void SaveEventBits(Fight f, int var)
+        {
+            var bits = D?.EventBits;
+            if (bits == null || bits.Count == 0 || !SnesAi.IsBattleVar(var)) return;
+            try
+            {
+                var ds = Last.Interpreter.DataStorage.Instance;
+                if (ds == null) return;
+                foreach (var (v, mask, cat, index) in bits)
+                    if (v == var)
+                    {
+                        int on = (f.Vars[v] & mask) != 0 ? 1 : 0;
+                        if (ds.Get(cat, index) != on)
+                        {
+                            ds.Set(cat, index, on);
+                            Log($": battle event bit (var {v:x2} mask {mask:x2}) -> {cat} {index} = {on}");
+                        }
+                    }
+            }
+            catch (Exception e) { Hooks.WarnOnce("enemy-ai-event-bits", e); }
+        }
+
+        // FB misc effects the battle can do here (C2/1E5E MiscAIEffectTbl, read off the ROM 2026-11-20): timers;
+        // with the mod's ScriptStatusEffects a status set/cleared on itself (0B/0C: status index 0-31, 0B 07
+        // = Wound: it dies), the battle's end (02, 09: as "everyone dies like a boss"), a target made
+        // invincible / vulnerable (01/05: $3A3C, the SNES zeroes its damage: C2/13B0), monsters made
+        // targetable / untargetable (06/07: $2F46, what CheckTargetsPresent allows: the PR's NotTargeting)
+        // and itself hidden (0D: status 4 bit 5, removed from battle: as F5's hide); the rest is logged
+        static void ApplyMisc(Fight f, int slot, SnesAiAction a, BattleUnitData me, List<SnesAiAction> entries, BattleUnitData[] units)
         {
             bool status = Mod != null && Mod.ScriptStatusEffects;
             var ed = me?.TryCast<BattleEnemyData>();
+            var ec = BattlePlugManager.Instance()?.EventCommand;
             switch (a.B1)
             {
                 case 0x00: f.MonsterTime[slot] = 0; return;   // reset this monster's timer
                 case 0x04: f.BattleTime = 0; return;          // reset the battle timer
                 case 0x02 when status:
+                case 0x09 when status:
                     entries.Add(new SnesAiAction { Op = SnesAiOp.EntryExit, B1 = 0x0C, B2 = 5, B3 = 0xFF });
                     return;
                 case 0x0B when status && ed != null && a.B2 == 7:
                     f.PendingKill.Add(ed.UniqueId);            // after this pass (Update): the game's death
                     return;
                 case 0x0B when status && ed != null && a.B2 < 32 && StatusCondition[a.B2] > 0:
-                    BattlePlugManager.Instance()?.EventCommand?.AddConditionEnemy(ed.UniqueId, StatusCondition[a.B2]);
+                    ec?.AddConditionEnemy(ed.UniqueId, StatusCondition[a.B2]);
                     return;
                 case 0x0C when status && ed != null && a.B2 < 32 && StatusCondition[a.B2] > 0:
-                    BattlePlugManager.Instance()?.EventCommand?.RecoveryConditionEnemy(ed.UniqueId, StatusCondition[a.B2]);
+                    Lift(ec, ed, StatusCondition[a.B2]);
+                    return;
+                case 0x01 when status:
+                case 0x05 when status:
+                    {
+                        int mask = SnesAi.Target(new View(f, units), 4 + slot, a.B2, false, D?.Rules);
+                        var did = new List<string>();
+                        for (int u = 0; u < 10; u++)
+                        {
+                            if ((mask & SnesAi.MaskOf(u)) == 0 || units[u] == null) continue;
+                            var p = units[u].BattleUnitDataInfo?.Parameter;
+                            if (a.B1 == 0x01 && p != null) f.Invincible[units[u].Pointer] = Math.Max(1, p.CurrentHP);
+                            else f.Invincible.Remove(units[u].Pointer);
+                            did.Add(u.ToString());
+                        }
+                        if (Verbose) Log($": units [{string.Join(" ", did)}] {(a.B1 == 0x01 ? "invincible" : "vulnerable again")} (FB {a.B1:x2} {a.B2:x2})");
+                        return;
+                    }
+                case 0x06 when status:
+                case 0x07 when status:
+                    {
+                        int mask = SnesAi.Target(new View(f, units), 4 + slot, a.B2, false, D?.Rules);
+                        var did = new List<string>();
+                        for (int u = 4; u < 10; u++)
+                        {
+                            var x = units[u]?.TryCast<BattleEnemyData>();
+                            if ((mask & SnesAi.MaskOf(u)) == 0 || x == null || ec == null) continue;
+                            if (a.B1 == 0x07) { if (!HasCondition(x, NotTargeting)) ec.AddConditionEnemy(x.UniqueId, NotTargeting); }
+                            else { Lift(ec, x, NotTargeting); Lift(ec, x, 625); }
+                            did.Add((u - 4).ToString());
+                        }
+                        if (Verbose) Log($": monster slots [{string.Join(" ", did)}] {(a.B1 == 0x06 ? "targetable" : "untargetable")} (FB {a.B1:x2} {a.B2:x2})");
+                        return;
+                    }
+                case 0x0D when status:
+                    entries.Add(new SnesAiAction { Op = SnesAiOp.EntryExit, B1 = 0, B2 = 3, B3 = 1 << slot });
                     return;
             }
             if (Seen.Add($"misc {a.B1:x2} {a.B2:x2}")) Log($": misc effect {a.B1:x2} {a.B2:x2} not done yet");
+        }
+
+        internal const int NotTargeting = 667;   // ConditionType.NotTargeting (condition 76: attack_target 1)
+
+        // EventCommand.RecoveryConditionEnemy takes a condition's id (its master Condition row), not its type
+        // as AddConditionEnemy does (decompiled 2026-11-20; Escape is 3 both ways): ids by type from the master
+        static Dictionary<int, int> conditionIds;
+        internal static int ConditionId(int type)
+        {
+            if (conditionIds == null)
+            {
+                var map = new Dictionary<int, int>();
+                try
+                {
+                    var all = Last.Data.Master.MasterManager.Instance?.GetList<Last.Data.Master.Condition>();
+                    if (all != null)
+                        foreach (var kv in all)
+                            if (kv.Value != null && !map.ContainsKey(kv.Value.ConditionType)) map[kv.Value.ConditionType] = kv.Value.Id;
+                }
+                catch (Exception e) { Hooks.WarnOnce("enemy-ai-condition-ids", e); }
+                if (map.Count == 0) return type;   // not loaded yet: try the type
+                conditionIds = map;
+            }
+            return conditionIds.TryGetValue(type, out int id) ? id : type;
+        }
+
+        internal static void Lift(EventCommand ec, BattleEnemyData unit, int type)
+        {
+            if (ec != null && unit != null && HasCondition(unit, type)) ec.RecoveryConditionEnemy(unit.UniqueId, ConditionId(type));
+        }
+
+        // FB 01's invincible units keep their HP (UpdateConditionHp_Prefix puts back what a hit took); a heal
+        // raises what they keep
+        static void KeepInvincible(Fight f)
+        {
+            if (f.Invincible.Count == 0) return;
+            foreach (var u in Units())
+            {
+                if (u == null || !f.Invincible.TryGetValue(u.Pointer, out int keep)) continue;
+                var p = u.BattleUnitDataInfo?.Parameter;
+                if (p != null && p.CurrentHP > keep) f.Invincible[u.Pointer] = p.CurrentHP;
+            }
+        }
+
+        // a SNES battle event (F7) the mod answers with the PR monster mode its battle script reads
+        // (GetEnemyMode: EnemyCharacterParameter.CurrentMode, what the PR AI's ModeSet writes)
+        static void BattleEvent(int snesId, int ev, BattleUnitData me)
+        {
+            var d = D;
+            if (d != null && d.EventModes.TryGetValue(snesId, out var modes) && modes.TryGetValue(ev, out int mode))
+            {
+                var ep = me?.BattleUnitDataInfo?.Parameter?.TryCast<Last.Data.EnemyCharacterParameter>();
+                if (ep != null) ep.CurrentMode = mode;
+                if (Verbose) Log($": monster {snesId}: battle event {ev:x2} -> its PR mode {mode}{(ep == null ? " (no enemy parameter!)" : "")}");
+                return;
+            }
+            if (Seen.Add($"event {snesId} {ev}")) Log($": monster {snesId}: battle event {ev:x2} left to the PR's battle script");
         }
 
         internal static readonly HashSet<string> Seen = new HashSet<string>();

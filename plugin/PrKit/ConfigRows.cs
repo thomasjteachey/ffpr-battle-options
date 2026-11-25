@@ -31,8 +31,26 @@ namespace PrKit
     {
         const int BattleMode = 1, BattleMessage = 3, OwnTypes = 7000;
         static readonly List<ConfigRow> rows = new List<ConfigRow>();
-        static bool patched;
-        public static int RowsAdded;
+        static readonly List<(int Type, Func<bool> When)> hidden = new List<(int, Func<bool>)>();
+        static bool patched, listPatched, listHooked;
+        public static int RowsAdded, RowsHidden;
+
+        // One of the game's rows taken out of the menu while `when` holds (a setting the mod's rules took away:
+        // Brave New World's Active/Wait and Battle Speed, BattleSettingsLock). Out of the list the cursor walks
+        // and its object inactive; it comes back on the next launch once `when` no longer holds.
+        public static void Hide(Harmony h, int type, Func<bool> when)
+        {
+            hidden.Add((type, when ?? (() => true)));
+            PatchList(h);
+        }
+
+        static bool PatchList(Harmony h)
+        {
+            if (listPatched) return listHooked;
+            listPatched = true;
+            listHooked = Patch(h, AccessTools.Method(typeof(Menu), "InitializeCommandList"), prefix: nameof(InitList_Prefix));
+            return listHooked;
+        }
 
         public static void Add(Harmony h, ConfigRow row)
         {
@@ -42,7 +60,7 @@ namespace PrKit
             int serial = Game.Current == PrGame.FF4 ? 0 : (int)Game.Current;   // FF4's own class is Serial.FF0's
             var game = Hooks.TypeByName($"Serial.FF{serial}.UI.KeyInput.ConfigActualDetailsController") ?? typeof(Menu);
             int n = 0;
-            if (Patch(h, AccessTools.Method(typeof(Menu), "InitializeCommandList"), prefix: nameof(InitList_Prefix))) n++;
+            if (PatchList(h)) n++;
             if (Patch(h, Find(game, "SetCommandUseType", 1), postfix: nameof(UseType_Postfix))) n++;
             if (Patch(h, Find(game, "SetCommandNameList", 1), postfix: nameof(Names_Postfix))) n++;
             if (Patch(h, Find(game, "SwitchArrowSelectTypeProcess", 2), postfix: nameof(Arrow_Postfix))) n++;
@@ -79,8 +97,32 @@ namespace PrKit
         public static void InitList_Prefix(Menu __instance)
         {
             if (!Hooks.IsA<Menu>(__instance)) return;
-            try { AddRows(__instance); }
+            try { if (rows.Count > 0) AddRows(__instance); }
             catch (Exception e) { Hooks.WarnOnce("config.rows", e); }
+            try { if (hidden.Count > 0) HideRows(__instance); }
+            catch (Exception e) { Hooks.WarnOnce("config.hide", e); }
+        }
+
+        static void HideRows(Menu menu)
+        {
+            var list = menu.commandList;
+            if (list == null) return;
+            var gone = new List<int>();
+            for (int i = list.Count - 1; i >= 0; i--)
+            {
+                var r = list[i];
+                int t = TypeOf(r);
+                bool hide = false;
+                foreach (var (type, when) in hidden)
+                    if (type == t && when()) { hide = true; break; }
+                if (!hide) continue;
+                list.RemoveAt(i);
+                if (r != null) r.gameObject.SetActive(false);
+                RowsHidden++;
+                gone.Add(t);
+            }
+            if (gone.Count > 0)
+                Hooks.NoteOnce("config-hidden-" + Kit.ModName, () => $"[config] rows of type {string.Join(", ", gone)} hidden ({Kit.ModName})");
         }
 
         static void AddRows(Menu menu)

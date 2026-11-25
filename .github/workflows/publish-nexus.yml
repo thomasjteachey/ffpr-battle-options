@@ -1,0 +1,157 @@
+name: Publish Nexus release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to upload (for example, 0.2.3)
+        required: true
+        type: string
+      changelog_only:
+        description: Only post the release notes as that version's Nexus changelog (no upload)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nexus-battle-options
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.release.draft == false && github.event.release.prerelease == false)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - { game: VI, game_id: 4335, mod_id: 166, zip: BattleOptions-PR }
+          - { game: IV, game_id: 4022, mod_id: 115, zip: BattleOptions-FF4-PR }
+          - { game: V, game_id: 4137, mod_id: 100, zip: BattleOptions-FF5-PR }
+
+    steps:
+      - name: Resolve release version
+        id: version
+        shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${DISPATCH_VERSION:-$RELEASE_TAG}"
+          version="${version#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release version: $version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "zip=${{ matrix.zip }}-$version.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Download the tested release zip
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ZIP: ${{ steps.version.outputs.zip }}
+        run: |
+          mkdir -p release
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$ZIP" --dir release
+          test -f "release/$ZIP"
+
+      - name: Check the zip (the plugin and its README only)
+        shell: python
+        env:
+          ZIP: ${{ steps.version.outputs.zip }}
+        run: |
+          import os
+          import pathlib
+          import zipfile
+
+          with zipfile.ZipFile("release/" + os.environ["ZIP"]) as archive:
+              names = [entry.filename for entry in archive.infolist() if not entry.is_dir()]
+          roots = {pathlib.PurePosixPath(name).parts[0] for name in names}
+          if roots != {"BepInEx", "BattleOptions-README.txt"}:
+              raise SystemExit(f"Unexpected top-level entries: {sorted(roots)}")
+          for name in names:
+              path = pathlib.PurePosixPath(name)
+              if path.is_absolute() or ".." in path.parts:
+                  raise SystemExit(f"Unsafe archive path: {name}")
+              if path.suffix.lower() not in (".dll", ".txt"):
+                  raise SystemExit(f"Not the plugin or its README: {name}")
+          if "BepInEx/plugins/BattleOptions/BattleOptions.PR.dll" not in names:
+              raise SystemExit("The zip has no Battle Options plugin")
+          print(f"{len(names)} files ok")
+
+      - name: Read the release notes for the Nexus changelog
+        id: notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json body --jq .body | tr -d '\r' > body.md
+          awk '/^## Changes/{f=1;next} /^## /{f=0} f' body.md > changes.md
+          test -s changes.md || cp body.md changes.md
+          sed -e '/^#/d' -e 's/\*\*//g' -e 's/`//g' -e 's/^- /* /' changes.md | sed -e '/./,$!d' > notes.txt
+          {
+            echo "changelog<<NOTES_END"
+            cat notes.txt
+            echo "NOTES_END"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Find the Nexus file to update
+        id: nexus_file
+        shell: bash
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+        run: |
+          mod_uid=$(( ${{ matrix.game_id }} * 4294967296 + ${{ matrix.mod_id }} ))
+          response="$(curl --fail --silent --show-error \
+            --header "apikey: $NEXUSMODS_API_KEY" \
+            --header "User-Agent: ffpr-battle-options/release-workflow" \
+            "https://api.nexusmods.com/v3/mods/$mod_uid/files")"
+          file_id="$(jq -er '.data.mod_files | map(select(.is_active == true)) |
+            if length == 1 then .[0].id else error("Expected exactly one active file, got \(length)") end' <<<"$response")"
+          echo "file_id=$file_id" >> "$GITHUB_OUTPUT"
+          echo "mod_uid=$mod_uid" >> "$GITHUB_OUTPUT"
+
+      - name: Post the changelog only
+        if: inputs.changelog_only == true
+        shell: bash
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          MOD_UID: ${{ steps.nexus_file.outputs.mod_uid }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          jq -n --arg version "$VERSION" --rawfile changelog notes.txt '{version: $version, changelog: $changelog}' |
+            curl --fail-with-body --silent --show-error --request POST \
+              --header "apikey: $NEXUSMODS_API_KEY" \
+              --header "Content-Type: application/json" \
+              --header "User-Agent: ffpr-battle-options/release-workflow" \
+              --data @- "https://api.nexusmods.com/v3/mods/$MOD_UID/changelogs"
+
+      - name: Upload Battle Options to Nexus Mods
+        if: inputs.changelog_only != true
+        uses: Nexus-Mods/upload-action@98532f7670c27cbecc78fae03fa3e278147827e2 # v1.0.0-beta.11
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ steps.nexus_file.outputs.file_id }}
+          filename: release/${{ steps.version.outputs.zip }}
+          version: ${{ steps.version.outputs.version }}
+          display_name: Battle Options ${{ steps.version.outputs.version }}
+          description: Battle Options for FINAL FANTASY ${{ matrix.game }} Pixel Remaster (Pause battle mode, Enemy ATB and more in the Config menu). The install steps are on the mod page.
+          category: main
+          archive_existing_version: "true"
+          primary_mod_manager_download: "true"
+          allow_mod_manager_download: "false"
+          show_requirements_pop_up: "false"
+          update_mod_version: "true"
+          changelog: ${{ steps.notes.outputs.changelog }}
+          mod_id: ${{ steps.nexus_file.outputs.mod_uid }}
